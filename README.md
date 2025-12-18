@@ -21,7 +21,26 @@ fly/
 
 ## Building
 
-Build individual binaries:
+### Using Makefile (Recommended)
+
+```bash
+# Build all binaries
+make build
+
+# Build and install to $GOPATH/bin
+make install
+
+# Clean build artifacts
+make clean
+
+# Run tests
+make test
+
+# Show all available targets
+make help
+```
+
+### Using Go Commands Directly
 
 ```bash
 # Build echo service
@@ -29,6 +48,9 @@ go build -o bin/maelstrom-echo ./cmd/maelstrom-echo
 
 # Build unique IDs service
 go build -o bin/maelstrom-unique-ids ./cmd/maelstrom-unique-ids
+
+# Build broadcast service
+go build -o bin/maelstrom-broadcast ./cmd/maelstrom-broadcast
 
 # Build all binaries
 go build -o bin/ ./cmd/...

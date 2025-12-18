@@ -25,3 +25,5 @@ store/
 *.swo
 *~
 
+# Maelstrom
+maelstrom/
