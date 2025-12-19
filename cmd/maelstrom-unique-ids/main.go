@@ -4,15 +4,14 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-
-	"github.com/google/uuid"
+	"strconv"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 func main() {
 	n := maelstrom.NewNode()
-	ts := 1
+	var ts uint64 = 1
 
 	// Register a handler for the "echo" message that responds with an "echo_ok".
 	n.Handle("echo", func(msg maelstrom.Message) error {
@@ -37,7 +36,9 @@ func main() {
 		}
 
 		body["type"] = "generate_ok"
-		body["id"] = uuid.New().String()
+
+		// body["id"] = uuid.New().String()
+		body["id"] = n.ID() + "-" + strconv.FormatUint(ts, 10)
 
 		return n.Reply(msg, body)
 	})
@@ -48,4 +49,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
