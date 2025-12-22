@@ -15,9 +15,6 @@ bin/
 # Go workspace file
 go.work
 
-# Maelstrom store (test results)
-store/
-
 # IDE
 .idea/
 .vscode/
