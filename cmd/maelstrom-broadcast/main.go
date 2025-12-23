@@ -33,16 +33,35 @@ func main() {
 		messagesMu.Unlock()
 
 		if !exists {
-			// for _, node := range n.NodeIDs() {
-			for _, node := range neighbors {
+			for _, node := range n.NodeIDs() {
+				// for _, node := range neighbors {
 				log.Println("Node: ", node)
 				if node != n.ID() && node != msg.Src {
-					n.Send(node, body)
+					n.Send(node, map[string]any{"type": "replicate", "message": message})
 				}
 			}
 		}
 
 		return n.Reply(msg, map[string]any{"type": "broadcast_ok"})
+	})
+
+	n.Handle("replicate", func(msg maelstrom.Message) error {
+		var body map[string]any
+
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return err
+		}
+
+		message := int(body["message"].(float64))
+
+		messagesMu.Lock()
+		_, exists := messages[message]
+		if !exists {
+			messages[message] = true
+		}
+		messagesMu.Unlock()
+
+		return nil
 	})
 
 	n.Handle("read", func(msg maelstrom.Message) error {
