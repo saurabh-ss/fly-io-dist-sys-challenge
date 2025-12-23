@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -12,6 +13,8 @@ func main() {
 	n := maelstrom.NewNode()
 
 	messages := map[int]bool{}
+	var messagesMu sync.RWMutex
+	var neighbors []string
 
 	n.Handle("broadcast", func(msg maelstrom.Message) error {
 		var body map[string]any
@@ -22,9 +25,16 @@ func main() {
 
 		message := int(body["message"].(float64))
 
-		if _, exists := messages[message]; !exists {
+		messagesMu.Lock()
+		_, exists := messages[message]
+		if !exists {
 			messages[message] = true
-			for _, node := range n.NodeIDs() {
+		}
+		messagesMu.Unlock()
+
+		if !exists {
+			// for _, node := range n.NodeIDs() {
+			for _, node := range neighbors {
 				log.Println("Node: ", node)
 				if node != n.ID() && node != msg.Src {
 					n.Send(node, body)
@@ -43,10 +53,12 @@ func main() {
 		}
 
 		// Extract all values from the messages map into a slice
-		messageValues := []int{}
+		messagesMu.RLock()
+		messageValues := make([]int, 0, len(messages))
 		for key := range messages {
 			messageValues = append(messageValues, key)
 		}
+		messagesMu.RUnlock()
 
 		body["type"] = "read_ok"
 		body["messages"] = messageValues
@@ -59,6 +71,14 @@ func main() {
 		if err := json.Unmarshal(msg.Body, &body); err != nil {
 			return err
 		}
+
+		// We can assume n.ID() is present in topology
+		neighborList := body["topology"].(map[string]any)[n.ID()].([]any)
+		neighbors = neighbors[:0]
+		for _, v := range neighborList {
+			neighbors = append(neighbors, v.(string))
+		}
+		log.Print("Neighbors: ", neighbors)
 
 		return n.Reply(msg, map[string]any{"type": "topology_ok"})
 	})
