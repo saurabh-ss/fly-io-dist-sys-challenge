@@ -44,7 +44,6 @@ func main() {
 						pending[node] = make(map[int]struct{})
 					}
 					pending[node][message] = struct{}{}
-					n.Send(node, map[string]any{"type": "replicate", "message": message})
 				}
 			}
 			pendingMu.Unlock()
@@ -75,6 +74,28 @@ func main() {
 		return nil
 	})
 
+	n.Handle("replicate_batch", func(msg maelstrom.Message) error {
+		var body map[string]any
+
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return err
+		}
+
+		// Extract the message batch (slice of floats from JSON)
+		messageBatchRaw := body["message_batch"].([]any)
+
+		messagesMu.Lock()
+		for _, msgRaw := range messageBatchRaw {
+			message := int(msgRaw.(float64))
+			messages[message] = true
+		}
+		messagesMu.Unlock()
+
+		body["type"] = "replicate_batch_ok"
+		n.Send(msg.Src, body)
+		return nil
+	})
+
 	n.Handle("replicate_ok", func(msg maelstrom.Message) error {
 		var body map[string]any
 
@@ -87,6 +108,31 @@ func main() {
 		pendingMu.Lock()
 		if nodePending, exists := pending[msg.Src]; exists {
 			delete(nodePending, int(message))
+			if len(nodePending) == 0 {
+				delete(pending, msg.Src)
+			}
+		}
+		pendingMu.Unlock()
+
+		return nil
+	})
+
+	n.Handle("replicate_batch_ok", func(msg maelstrom.Message) error {
+		var body map[string]any
+
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return err
+		}
+
+		// Extract the message batch and remove all from pending
+		messageBatchRaw := body["message_batch"].([]any)
+
+		pendingMu.Lock()
+		if nodePending, exists := pending[msg.Src]; exists {
+			for _, msgRaw := range messageBatchRaw {
+				message := int(msgRaw.(float64))
+				delete(nodePending, message)
+			}
 			if len(nodePending) == 0 {
 				delete(pending, msg.Src)
 			}
@@ -135,7 +181,7 @@ func main() {
 	})
 
 	go func() {
-		ticker := time.NewTicker(3 * time.Second)
+		ticker := time.NewTicker(750 * time.Millisecond)
 		defer ticker.Stop()
 
 		for range ticker.C {
@@ -143,8 +189,14 @@ func main() {
 			total := 0
 			for node, messages := range pending {
 				total += len(messages)
+				// Collect all pending messages for this node into a slice
+				messageBatch := make([]int, 0, len(messages))
 				for message := range messages {
-					n.Send(node, map[string]any{"type": "replicate", "message": message})
+					messageBatch = append(messageBatch, message)
+				}
+				// Send all messages in a single batch
+				if len(messageBatch) > 0 {
+					n.Send(node, map[string]any{"type": "replicate_batch", "message_batch": messageBatch})
 				}
 			}
 			pendingMu.RUnlock()
