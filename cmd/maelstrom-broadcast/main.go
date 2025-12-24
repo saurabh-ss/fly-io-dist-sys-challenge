@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"time"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -15,6 +16,9 @@ func main() {
 	messages := map[int]bool{}
 	var messagesMu sync.RWMutex
 	var neighbors []string
+
+	pending := map[string]map[int]struct{}{}
+	var pendingMu sync.RWMutex
 
 	n.Handle("broadcast", func(msg maelstrom.Message) error {
 		var body map[string]any
@@ -33,13 +37,18 @@ func main() {
 		messagesMu.Unlock()
 
 		if !exists {
+			pendingMu.Lock()
 			for _, node := range n.NodeIDs() {
-				// for _, node := range neighbors {
-				log.Println("Node: ", node)
 				if node != n.ID() && node != msg.Src {
+					if pending[node] == nil {
+						pending[node] = make(map[int]struct{})
+					}
+					pending[node][message] = struct{}{}
 					n.Send(node, map[string]any{"type": "replicate", "message": message})
 				}
 			}
+			pendingMu.Unlock()
+
 		}
 
 		return n.Reply(msg, map[string]any{"type": "broadcast_ok"})
@@ -60,6 +69,29 @@ func main() {
 			messages[message] = true
 		}
 		messagesMu.Unlock()
+
+		body["type"] = "replicate_ok"
+		n.Send(msg.Src, body)
+		return nil
+	})
+
+	n.Handle("replicate_ok", func(msg maelstrom.Message) error {
+		var body map[string]any
+
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return err
+		}
+		// Remove the message from the pending set for this node, if present
+		message := int(body["message"].(float64))
+
+		pendingMu.Lock()
+		if nodePending, exists := pending[msg.Src]; exists {
+			delete(nodePending, int(message))
+			if len(nodePending) == 0 {
+				delete(pending, msg.Src)
+			}
+		}
+		pendingMu.Unlock()
 
 		return nil
 	})
@@ -101,6 +133,24 @@ func main() {
 
 		return n.Reply(msg, map[string]any{"type": "topology_ok"})
 	})
+
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			pendingMu.RLock()
+			total := 0
+			for node, messages := range pending {
+				total += len(messages)
+				for message := range messages {
+					n.Send(node, map[string]any{"type": "replicate", "message": message})
+				}
+			}
+			pendingMu.RUnlock()
+			log.Printf("Current size of pending map: %d", total)
+		}
+	}()
 
 	// Execute the node's message loop. This will run until STDIN is closed.
 	if err := n.Run(); err != nil {
