@@ -1,7 +1,7 @@
-.PHONY: all build install clean test help
+.PHONY: all build clean test help
 
 # Binary names
-BINARIES := maelstrom-echo maelstrom-unique-ids maelstrom-broadcast
+BINARIES := maelstrom-echo maelstrom-unique-ids maelstrom-broadcast maelstrom-counter
 
 # Build directory
 BUILD_DIR := bin
@@ -18,24 +18,8 @@ GOMOD := $(GOCMD) mod
 
 all: build ## Build all binaries
 
-build: ## Build all binaries to bin/
-	@echo "Building binaries..."
-	@mkdir -p $(BUILD_DIR)
-	@for binary in $(BINARIES); do \
-		echo "  Building $$binary..."; \
-		$(GOBUILD) -o $(BUILD_DIR)/$$binary ./cmd/$$binary || exit 1; \
-	done
+build: $(addprefix $(BUILD_DIR)/,$(BINARIES)) ## Build all binaries to bin/ and install to $(INSTALL_DIR)
 	@echo "✓ Build complete"
-
-install: build ## Install binaries to $(INSTALL_DIR)
-	@echo "Installing binaries to $(INSTALL_DIR)..."
-	@mkdir -p $(INSTALL_DIR)
-	@for binary in $(BINARIES); do \
-		echo "  Installing $$binary..."; \
-		cp $(BUILD_DIR)/$$binary $(INSTALL_DIR)/$$binary; \
-		chmod +x $(INSTALL_DIR)/$$binary; \
-	done
-	@echo "✓ Install complete"
 
 clean: ## Remove build artifacts
 	@echo "Cleaning..."
@@ -53,17 +37,41 @@ tidy: ## Tidy go modules
 	@echo "✓ Tidy complete"
 
 # Individual binary targets
-$(BUILD_DIR)/maelstrom-echo: ## Build maelstrom-echo
+$(BUILD_DIR)/maelstrom-echo: $(wildcard cmd/maelstrom-echo/*.go) $(wildcard *.go) go.mod go.sum ## Build maelstrom-echo
+	@echo "  Building maelstrom-echo..."
 	@mkdir -p $(BUILD_DIR)
 	$(GOBUILD) -o $@ ./cmd/maelstrom-echo
+	@mkdir -p $(INSTALL_DIR)
+	@cp $@ $(INSTALL_DIR)/maelstrom-echo
+	@chmod +x $(INSTALL_DIR)/maelstrom-echo
+	@echo "  Installed maelstrom-echo to $(INSTALL_DIR)"
 
-$(BUILD_DIR)/maelstrom-unique-ids: ## Build maelstrom-unique-ids
+$(BUILD_DIR)/maelstrom-unique-ids: $(wildcard cmd/maelstrom-unique-ids/*.go) $(wildcard *.go) go.mod go.sum ## Build maelstrom-unique-ids
+	@echo "  Building maelstrom-unique-ids..."
 	@mkdir -p $(BUILD_DIR)
 	$(GOBUILD) -o $@ ./cmd/maelstrom-unique-ids
+	@mkdir -p $(INSTALL_DIR)
+	@cp $@ $(INSTALL_DIR)/maelstrom-unique-ids
+	@chmod +x $(INSTALL_DIR)/maelstrom-unique-ids
+	@echo "  Installed maelstrom-unique-ids to $(INSTALL_DIR)"
 
-$(BUILD_DIR)/maelstrom-broadcast: ## Build maelstrom-broadcast
+$(BUILD_DIR)/maelstrom-broadcast: $(wildcard cmd/maelstrom-broadcast/*.go) $(wildcard *.go) go.mod go.sum ## Build maelstrom-broadcast
+	@echo "  Building maelstrom-broadcast..."
 	@mkdir -p $(BUILD_DIR)
 	$(GOBUILD) -o $@ ./cmd/maelstrom-broadcast
+	@mkdir -p $(INSTALL_DIR)
+	@cp $@ $(INSTALL_DIR)/maelstrom-broadcast
+	@chmod +x $(INSTALL_DIR)/maelstrom-broadcast
+	@echo "  Installed maelstrom-broadcast to $(INSTALL_DIR)"
+
+$(BUILD_DIR)/maelstrom-counter: $(wildcard cmd/maelstrom-counter/*.go) $(wildcard *.go) go.mod go.sum ## Build maelstrom-counter
+	@echo "  Building maelstrom-counter..."
+	@mkdir -p $(BUILD_DIR)
+	$(GOBUILD) -o $@ ./cmd/maelstrom-counter
+	@mkdir -p $(INSTALL_DIR)
+	@cp $@ $(INSTALL_DIR)/maelstrom-counter
+	@chmod +x $(INSTALL_DIR)/maelstrom-counter
+	@echo "  Installed maelstrom-counter to $(INSTALL_DIR)"
 
 help: ## Show this help message
 	@echo "Usage: make [target]"
