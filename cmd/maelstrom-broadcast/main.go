@@ -44,6 +44,9 @@ func main() {
 						pending[node] = make(map[int]struct{})
 					}
 					pending[node][message] = struct{}{}
+
+					// Comment the following out for Challenge #3e: Efficient Broadcast, Part II
+					// n.Send(node, map[string]any{"type": "replicate", "message": message})
 				}
 			}
 			pendingMu.Unlock()
@@ -70,7 +73,10 @@ func main() {
 		messagesMu.Unlock()
 
 		body["type"] = "replicate_ok"
-		n.Send(msg.Src, body)
+		err := n.Send(msg.Src, body)
+		if err != nil {
+			return err
+		}
 		return nil
 	})
 
@@ -92,7 +98,10 @@ func main() {
 		messagesMu.Unlock()
 
 		body["type"] = "replicate_batch_ok"
-		n.Send(msg.Src, body)
+		err := n.Send(msg.Src, body)
+		if err != nil {
+			return err
+		}
 		return nil
 	})
 
@@ -107,7 +116,7 @@ func main() {
 
 		pendingMu.Lock()
 		if nodePending, exists := pending[msg.Src]; exists {
-			delete(nodePending, int(message))
+			delete(nodePending, message)
 			if len(nodePending) == 0 {
 				delete(pending, msg.Src)
 			}
@@ -181,7 +190,7 @@ func main() {
 	})
 
 	go func() {
-		ticker := time.NewTicker(750 * time.Millisecond)
+		ticker := time.NewTicker(1000 * time.Millisecond)
 		defer ticker.Stop()
 
 		for range ticker.C {
@@ -196,7 +205,10 @@ func main() {
 				}
 				// Send all messages in a single batch
 				if len(messageBatch) > 0 {
-					n.Send(node, map[string]any{"type": "replicate_batch", "message_batch": messageBatch})
+					err := n.Send(node, map[string]any{"type": "replicate_batch", "message_batch": messageBatch})
+					if err != nil {
+						return
+					}
 				}
 			}
 			pendingMu.RUnlock()
