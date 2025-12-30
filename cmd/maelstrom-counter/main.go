@@ -12,8 +12,6 @@ import (
 func main() {
 	node := maelstrom.NewNode()
 	kv := maelstrom.NewSeqKV(node)
-	key := "counter"
-	counter := 0
 
 	node.Handle("add", func(msg maelstrom.Message) error {
 		var body map[string]any
@@ -23,28 +21,43 @@ func main() {
 		}
 
 		delta := int(body["delta"].(float64))
-		counter += delta
+		key := node.ID()
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := context.Background()
 
-		err := kv.Write(ctx, key, counter)
-		if err != nil {
-			return err
+		for {
+			val, err := kv.ReadInt(ctx, key)
+			if err != nil {
+				val = 0
+			}
+			err = kv.CompareAndSwap(ctx, key, val, val+delta, true)
+			if err != nil {
+				log.Printf("CAS failed from %d to %d", val, val+delta)
+			} else {
+				return node.Reply(msg, map[string]any{"type": "add_ok"})
+			}
 		}
-
-		return node.Reply(msg, map[string]any{"type": "add_ok"})
 	})
 
 	node.Handle("read", func(msg maelstrom.Message) error {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		value, err := kv.ReadInt(ctx, key)
+		var body map[string]any
 
-		if err != nil {
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
 			return err
 		}
-		return node.Reply(msg, map[string]any{"type": "read_ok", "value": value})
+
+		ctx := context.Background()
+		kv.Write(ctx, "last", int(body["msg_id"].(float64)))
+
+		total := 0
+		for _, n := range node.NodeIDs() {
+			value, err := kv.ReadInt(ctx, n)
+			if err != nil {
+				value = 0
+			}
+			total += value
+		}
+		return node.Reply(msg, map[string]any{"type": "read_ok", "value": total})
 	})
 
 	// Execute the node's message loop. This will run until STDIN is closed.
