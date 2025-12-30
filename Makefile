@@ -1,7 +1,7 @@
 .PHONY: all build clean test help
 
 # Binary names
-BINARIES := maelstrom-echo maelstrom-unique-ids maelstrom-broadcast maelstrom-counter
+BINARIES := maelstrom-echo maelstrom-unique-ids maelstrom-broadcast maelstrom-counter maelstrom-kafka
 
 # Build directory
 BUILD_DIR := bin
@@ -72,6 +72,15 @@ $(BUILD_DIR)/maelstrom-counter: $(wildcard cmd/maelstrom-counter/*.go) $(wildcar
 	@cp $@ $(INSTALL_DIR)/maelstrom-counter
 	@chmod +x $(INSTALL_DIR)/maelstrom-counter
 	@echo "  Installed maelstrom-counter to $(INSTALL_DIR)"
+
+$(BUILD_DIR)/maelstrom-kafka: $(wildcard cmd/maelstrom-kafka/*.go) $(wildcard *.go) go.mod go.sum ## Build maelstrom-kafka
+	@echo "  Building maelstrom-kafka..."
+	@mkdir -p $(BUILD_DIR)
+	$(GOBUILD) -o $@ ./cmd/maelstrom-kafka
+	@mkdir -p $(INSTALL_DIR)
+	@cp $@ $(INSTALL_DIR)/maelstrom-kafka
+	@chmod +x $(INSTALL_DIR)/maelstrom-kafka
+	@echo "  Installed maelstrom-kafka to $(INSTALL_DIR)"
 
 help: ## Show this help message
 	@echo "Usage: make [target]"
