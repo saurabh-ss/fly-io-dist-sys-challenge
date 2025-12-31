@@ -1,12 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
+	"slices"
 	"sort"
 	"sync"
-	"sync/atomic"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -32,6 +33,11 @@ type PollBody struct {
 	Offsets map[string]int `json:"offsets"`
 }
 
+type PollOkBody struct {
+	Type string             `json:"type"`
+	Msgs map[string][][]int `json:"msgs"`
+}
+
 type ListCommittedOffsetsBody struct {
 	Type string   `json:"type"`
 	Keys []string `json:"keys"`
@@ -41,16 +47,29 @@ func main() {
 
 	n := maelstrom.NewNode()
 
+	// Storing commit offsets
+	commitOffsets := maelstrom.NewLinKV(n)
+
+	// Storing global offset
+	kv := maelstrom.NewLinKV(n)
+
 	// Main append-only log
 	appendLog := make(map[string][]Pair)
 	var appendLogMu sync.RWMutex
 
-	// Offset vendor
-	var globalOffset atomic.Int64
-
-	// Storing commit offsets
-	commitOffsets := make(map[string]int)
-	var commitOffsetsMu sync.RWMutex
+	getGlobalOffset := func() int {
+		ctx := context.Background()
+		for {
+			val, err := kv.ReadInt(ctx, "global_offset")
+			if err != nil {
+				val = 0
+			}
+			err = kv.CompareAndSwap(ctx, "global_offset", val, val+1, true)
+			if err == nil {
+				return val + 1
+			}
+		}
+	}
 
 	getMessages := func(key string, startOffset int) []Pair {
 		appendLogMu.RLock()
@@ -77,7 +96,7 @@ func main() {
 			return err
 		}
 
-		offsetVal := globalOffset.Add(1)
+		offsetVal := getGlobalOffset()
 
 		appendLogMu.Lock()
 		keyLog, found := appendLog[body.Key]
@@ -107,6 +126,43 @@ func main() {
 			msgs[key] = res
 		}
 
+		found := slices.Contains(n.NodeIDs(), m.Src)
+		if !found {
+			// Message is coming from a client
+			var wg sync.WaitGroup
+			var mu sync.Mutex
+
+			for _, nei := range n.NodeIDs() {
+				if nei != n.ID() {
+					wg.Add(1)
+					if err := n.RPC(nei, body, func(reply maelstrom.Message) error {
+						defer wg.Done()
+						var replyBody PollOkBody
+						if err := json.Unmarshal(reply.Body, &replyBody); err != nil {
+							return err
+						}
+
+						mu.Lock()
+						defer mu.Unlock()
+						for k, v := range replyBody.Msgs {
+							msgs[k] = append(msgs[k], v...)
+						}
+						return nil
+					}); err != nil {
+						wg.Done()
+					}
+				}
+			}
+			wg.Wait()
+
+			for k, v := range msgs {
+				slices.SortFunc(v, func(a, b []int) int {
+					return a[0] - b[0]
+				})
+				msgs[k] = v
+			}
+		}
+
 		return n.Reply(m, map[string]any{
 			"type": "poll_ok",
 			"msgs": msgs,
@@ -118,12 +174,11 @@ func main() {
 		if err := json.Unmarshal(m.Body, &body); err != nil {
 			return err
 		}
+		ctx := context.Background()
 
-		commitOffsetsMu.Lock()
 		for key, offset := range body.Offsets {
-			commitOffsets[key] = offset
+			commitOffsets.Write(ctx, key, offset)
 		}
-		commitOffsetsMu.Unlock()
 
 		return n.Reply(m, map[string]any{"type": "commit_offsets_ok"})
 	})
@@ -135,14 +190,11 @@ func main() {
 		}
 
 		msgs := make(map[string]int)
-
-		commitOffsetsMu.RLock()
+		ctx := context.Background()
 		for _, key := range body.Keys {
-			if offset, ok := commitOffsets[key]; ok {
-				msgs[key] = offset
-			}
+			val, _ := commitOffsets.ReadInt(ctx, key)
+			msgs[key] = val
 		}
-		commitOffsetsMu.RUnlock()
 
 		return n.Reply(m, map[string]any{"type": "list_committed_offsets_ok", "offsets": msgs})
 
