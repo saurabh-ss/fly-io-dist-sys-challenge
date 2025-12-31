@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -51,13 +52,14 @@ func main() {
 
 		keyLog, found := appendLog[key]
 		if found {
-			for idx, pair := range keyLog {
-				if pair.offset >= startOffset {
-					// Return a copy of the slice to avoid racing with future appends
-					res := make([]Pair, len(keyLog[idx:]))
-					copy(res, keyLog[idx:])
-					return res
-				}
+			idx := sort.Search(len(keyLog), func(i int) bool {
+				return keyLog[i].offset >= startOffset
+			})
+			if idx < len(keyLog) {
+				// Return a copy of the slice to avoid racing with future appends
+				res := make([]Pair, len(keyLog[idx:]))
+				copy(res, keyLog[idx:])
+				return res
 			}
 		}
 		return nil
