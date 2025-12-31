@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -39,9 +40,15 @@ type ListCommittedOffsetsBody struct {
 func main() {
 
 	n := maelstrom.NewNode()
+
+	// Main append-only log
 	appendLog := make(map[string][]Pair)
 	var appendLogMu sync.RWMutex
+
+	// Offset vendor
 	var globalOffset atomic.Int64
+
+	// Storing commit offsets
 	commitOffsets := make(map[string]int)
 	var commitOffsetsMu sync.RWMutex
 
@@ -51,13 +58,14 @@ func main() {
 
 		keyLog, found := appendLog[key]
 		if found {
-			for idx, pair := range keyLog {
-				if pair.offset >= startOffset {
-					// Return a copy of the slice to avoid racing with future appends
-					res := make([]Pair, len(keyLog[idx:]))
-					copy(res, keyLog[idx:])
-					return res
-				}
+			idx := sort.Search(len(keyLog), func(i int) bool {
+				return keyLog[i].offset >= startOffset
+			})
+			if idx < len(keyLog) {
+				// Return a copy of the slice to avoid racing with future appends
+				res := make([]Pair, len(keyLog[idx:]))
+				copy(res, keyLog[idx:])
+				return res
 			}
 		}
 		return nil
@@ -146,66 +154,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
-/*
-send payload
-{
-  "type": "send",
-  "key": "k1",
-  "msg": 123
-}
-
-send reply
-{
-  "type": "send_ok",
-  "offset": 1000
-}
-
-poll payload
-{
-  "type": "poll",
-  "offsets": {
-    "k1": 1000,
-    "k2": 2000
-  }
-}
-
-poll reply
-{
-  "type": "poll_ok",
-  "msgs": {
-    "k1": [[1000, 9], [1001, 5], [1002, 15]],
-    "k2": [[2000, 7], [2001, 2]]
-  }
-}
-
-commit_offsets payload
-{
-  "type": "commit_offsets",
-  "offsets": {
-    "k1": 1000,
-    "k2": 2000
-  }
-}
-
-commit_offsets reply
-{
-  "type": "commit_offsets_ok"
-}
-
-list_committed_offsets payload
-{
-  "type": "list_committed_offsets",
-  "keys": ["k1", "k2"]
-}
-
-list_committed_offsets reply
-{
-  "type": "list_committed_offsets_ok",
-  "offsets": {
-    "k1": 1000,
-    "k2": 2000
-  }
-}
-
-*/
