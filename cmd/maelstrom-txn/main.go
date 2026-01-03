@@ -23,13 +23,6 @@ type txnResponse struct {
 	Txn       [][]any `json:"txn"`
 }
 
-type txnError struct {
-	Type      string `json:"type"`
-	InReplyTo int    `json:"in_reply_to"`
-	Code      int    `json:"code"`
-	Text      string `json:"text"`
-}
-
 func main() {
 	n := maelstrom.NewNode()
 
@@ -49,6 +42,7 @@ func main() {
 			Txn:       make([][]any, 0, len(req.Txn)),
 		}
 
+		// Release locks in reverse order
 		releaseLocks := func(ctx context.Context, lockList []string) {
 			for i := len(lockList) - 1; i >= 0; i-- {
 				key := lockList[i]
@@ -93,27 +87,26 @@ func main() {
 		var lockList []string
 
 		// Acquire locks for all keys in the union set
-	lockLoop:
-		for _, key := range keysList {
-			lockKey := fmt.Sprintf("lock-%s", key)
-			err := kv.CompareAndSwap(ctx, lockKey, 0, 1, true)
-			if err == nil {
-				lockList = append(lockList, lockKey)
+		for attempt := 1; ; attempt++ {
+			lockList = lockList[:0]
+			success := true
+			for _, key := range keysList {
+				lockKey := fmt.Sprintf("lock-%s", key)
+				err := kv.CompareAndSwap(ctx, lockKey, 0, 1, true)
+				if err == nil {
+					lockList = append(lockList, lockKey)
+				}
+				if err != nil {
+					log.Printf("lock error on key %s: %v (attempt %d)", lockKey, err, attempt)
+					log.Printf("Aborting transaction due to conflict with another transaction")
+					releaseLocks(ctx, lockList)
+					success = false
+					break
+				}
 			}
-			if err != nil {
-				log.Printf("lock error on key %s: %v", lockKey, err)
-				log.Printf("Aborting transaction due to conflict with another transaction")
-				// Release locks in reverse order
-				releaseLocks(ctx, lockList)
-				goto lockLoop
-				// return n.Reply(
-				// 	msg,
-				// 	map[string]any{
-				// 		"type": "error",
-				// 		"code": maelstrom.TxnConflict,
-				// 		"text": "txn abort",
-				// 	},
-				// )
+
+			if success {
+				break
 			}
 		}
 
