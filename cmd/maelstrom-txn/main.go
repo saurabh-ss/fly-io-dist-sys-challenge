@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -20,6 +21,13 @@ type txnResponse struct {
 	Type      string  `json:"type"`
 	InReplyTo int     `json:"in_reply_to"`
 	Txn       [][]any `json:"txn"`
+}
+
+type txnError struct {
+	Type      string `json:"type"`
+	InReplyTo int    `json:"in_reply_to"`
+	Code      int    `json:"code"`
+	Text      string `json:"text"`
 }
 
 func main() {
@@ -41,12 +49,81 @@ func main() {
 			Txn:       make([][]any, 0, len(req.Txn)),
 		}
 
+		releaseLocks := func(ctx context.Context, lockList []string) {
+			for i := len(lockList) - 1; i >= 0; i-- {
+				key := lockList[i]
+				err := kv.Write(ctx, key, 0)
+				if err != nil {
+					log.Printf("unlock error on key %s: %v", key, err)
+				}
+			}
+		}
+
 		ctx := context.Background()
+
+		readSet := make(map[string]struct{})
+		writeSet := make(map[string]struct{})
+
+		// Collect read and write sets
+		for _, op := range req.Txn {
+			kind := op[0].(string)
+			switch kind {
+			case "r":
+				readSet[fmt.Sprintf("%v", op[1])] = struct{}{}
+			case "w":
+				writeSet[fmt.Sprintf("%v", op[1])] = struct{}{}
+			}
+		}
+
+		// Union of read and write sets
+		unionSet := make(map[string]struct{})
+		for k := range readSet {
+			unionSet[k] = struct{}{}
+		}
+		for k := range writeSet {
+			unionSet[k] = struct{}{}
+		}
+
+		var keysList []string
+		for k := range unionSet {
+			keysList = append(keysList, k)
+		}
+		sort.Strings(keysList)
+
+		var lockList []string
+
+		// Acquire locks for all keys in the union set
+	lockLoop:
+		for _, key := range keysList {
+			lockKey := fmt.Sprintf("lock-%s", key)
+			err := kv.CompareAndSwap(ctx, lockKey, 0, 1, true)
+			if err == nil {
+				lockList = append(lockList, lockKey)
+			}
+			if err != nil {
+				log.Printf("lock error on key %s: %v", lockKey, err)
+				log.Printf("Aborting transaction due to conflict with another transaction")
+				// Release locks in reverse order
+				releaseLocks(ctx, lockList)
+				goto lockLoop
+				// return n.Reply(
+				// 	msg,
+				// 	map[string]any{
+				// 		"type": "error",
+				// 		"code": maelstrom.TxnConflict,
+				// 		"text": "txn abort",
+				// 	},
+				// )
+			}
+		}
+
+		// Log all acquired locks
+		log.Printf("Acquired locks: %v", lockList)
 
 		// Store read results to maintain original order in the response
 		readResults := make([]any, len(req.Txn))
 
-		// Pass 1: Perform all reads
+		// Perform all reads
 		for i, op := range req.Txn {
 			kind := op[0].(string)
 			if kind == "r" {
@@ -60,7 +137,7 @@ func main() {
 			}
 		}
 
-		// Pass 2: Perform all writes
+		// Perform all writes
 		for _, op := range req.Txn {
 			kind := op[0].(string)
 			if kind == "w" {
@@ -82,6 +159,12 @@ func main() {
 				resp.Txn = append(resp.Txn, []any{kind, op[1], op[2]})
 			}
 		}
+
+		// Release locks for all keys
+		releaseLocks(ctx, lockList)
+
+		// Log all released locks
+		log.Printf("Released locks: %v", lockList)
 
 		return n.Reply(msg, resp)
 	})
