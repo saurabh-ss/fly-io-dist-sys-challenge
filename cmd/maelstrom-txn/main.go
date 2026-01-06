@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sort"
+	"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -23,12 +23,17 @@ type txnResponse struct {
 	Txn       [][]any `json:"txn"`
 }
 
+type replicateRequest struct {
+	Type  string  `json:"type"`
+	MsgID int     `json:"msg_id"`
+	Txn   [][]any `json:"txn"`
+}
+
 func main() {
 	n := maelstrom.NewNode()
 
-	// Linearizable key-value store
-	// A sequential store seems to work too
-	kv := maelstrom.NewLinKV(n)
+	store := make(map[string]int)
+	var storeMu sync.RWMutex
 
 	n.Handle("txn", func(msg maelstrom.Message) error {
 		var req txnRequest
@@ -41,19 +46,6 @@ func main() {
 			InReplyTo: req.MsgID,
 			Txn:       make([][]any, 0, len(req.Txn)),
 		}
-
-		// Release locks in reverse order
-		releaseLocks := func(ctx context.Context, lockList []string) {
-			for i := len(lockList) - 1; i >= 0; i-- {
-				key := lockList[i]
-				err := kv.Write(ctx, key, 0)
-				if err != nil {
-					log.Printf("unlock error on key %s: %v", key, err)
-				}
-			}
-		}
-
-		ctx := context.Background()
 
 		readSet := make(map[string]struct{})
 		writeSet := make(map[string]struct{})
@@ -69,78 +61,49 @@ func main() {
 			}
 		}
 
-		// Union of read and write sets
-		unionSet := make(map[string]struct{})
-		for k := range readSet {
-			unionSet[k] = struct{}{}
-		}
-		for k := range writeSet {
-			unionSet[k] = struct{}{}
-		}
-
-		var keysList []string
-		for k := range unionSet {
-			keysList = append(keysList, k)
-		}
-		sort.Strings(keysList)
-
-		var lockList []string
-
-		// Acquire locks for all keys in the union set
-		for attempt := 1; ; attempt++ {
-			lockList = lockList[:0]
-			success := true
-			for _, key := range keysList {
-				lockKey := fmt.Sprintf("lock-%s", key)
-				err := kv.CompareAndSwap(ctx, lockKey, 0, 1, true)
-				if err == nil {
-					lockList = append(lockList, lockKey)
-				}
-				if err != nil {
-					log.Printf("lock error on key %s: %v (attempt %d)", lockKey, err, attempt)
-					log.Printf("Aborting transaction due to conflict with another transaction")
-					releaseLocks(ctx, lockList)
-					success = false
-					break
-				}
-			}
-
-			if success {
-				break
-			}
-		}
-
-		// Log all acquired locks
-		log.Printf("Acquired locks: %v", lockList)
-
 		// Store read results to maintain original order in the response
 		readResults := make([]any, len(req.Txn))
 
-		// Perform all reads
+		// Perform all reads with read lock
+		storeMu.RLock()
 		for i, op := range req.Txn {
 			kind := op[0].(string)
 			if kind == "r" {
 				key := fmt.Sprintf("%v", op[1])
-				val, err := kv.ReadInt(ctx, key)
-				if err != nil {
+				val, exists := store[key]
+				if !exists {
 					readResults[i] = nil
 				} else {
 					readResults[i] = val
 				}
 			}
 		}
+		storeMu.RUnlock()
 
-		// Perform all writes
+		// Perform all writes with write lock
+		storeMu.Lock()
 		for _, op := range req.Txn {
 			kind := op[0].(string)
 			if kind == "w" {
 				key := fmt.Sprintf("%v", op[1])
-				err := kv.Write(ctx, key, op[2])
-				if err != nil {
-					log.Printf("write error on key %s: %v", key, err)
-				}
+				val := int(op[2].(float64))
+				store[key] = val
 			}
 		}
+		storeMu.Unlock()
+
+		go func() {
+			ctx := context.Background()
+			for _, node := range n.NodeIDs() {
+				if node != n.ID() {
+					n.SyncRPC(ctx, node, replicateRequest{
+						Type:  "replicate",
+						MsgID: req.MsgID,
+						Txn:   req.Txn,
+					})
+				}
+			}
+		}()
 
 		// Reconstruct response in the original order
 		for i, op := range req.Txn {
@@ -153,13 +116,29 @@ func main() {
 			}
 		}
 
-		// Release locks for all keys
-		releaseLocks(ctx, lockList)
-
-		// Log all released locks
-		log.Printf("Released locks: %v", lockList)
-
 		return n.Reply(msg, resp)
+	})
+
+	n.Handle("replicate", func(msg maelstrom.Message) error {
+		var req replicateRequest
+		if err := json.Unmarshal(msg.Body, &req); err != nil {
+			return err
+		}
+
+		storeMu.Lock()
+		for _, op := range req.Txn {
+			kind := op[0].(string)
+			if kind == "w" {
+				key := fmt.Sprintf("%v", op[1])
+				val := int(op[2].(float64))
+				store[key] = val
+			}
+		}
+		storeMu.Unlock()
+
+		return n.Reply(msg, map[string]any{
+			"type": "replicate_ok",
+		})
 	})
 
 	// Execute the node's message loop. This will run until STDIN is closed.
