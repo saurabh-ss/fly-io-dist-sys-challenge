@@ -13,9 +13,18 @@ fly/
 ├── cmd/                      # Command-line applications
 │   ├── maelstrom-echo/       # Echo challenge
 │   │   └── main.go
-│   └── maelstrom-unique-ids/ # Unique IDs challenge
+│   ├── maelstrom-unique-ids/ # Unique IDs challenge
+│   │   └── main.go
+│   ├── maelstrom-broadcast/  # Broadcast challenge
+│   │   └── main.go
+│   ├── maelstrom-counter/    # Counter challenge
+│   │   └── main.go
+│   ├── maelstrom-kafka/      # Kafka challenge
+│   │   └── main.go
+│   └── maelstrom-txn/        # Transaction challenge
 │       └── main.go
 ├── bin/                      # Compiled binaries (gitignored)
+├── internal/                 # Internal shared code (when needed)
 └── maelstrom/                # Maelstrom test harness
 ```
 
@@ -81,8 +90,7 @@ To add a new challenge:
 ### Shared Code
 
 If you need to share code between challenges, create packages in:
-- `internal/` for project-specific shared code
-- `pkg/` for potentially reusable libraries
+- `internal/` for project-specific shared code (create this directory when needed)
 
 ## Dependencies
 
